@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+docker-compose.override.yml
+minio/data/
+*.log
+/tmp/
+.DS_Store

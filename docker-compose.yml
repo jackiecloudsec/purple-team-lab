@@ -1,0 +1,111 @@
+version: "3.8"
+
+services:
+  # ── Splunk Free (500MB/day ingest) ─────────────────────────────
+  splunk:
+    image: splunk/splunk:9.1
+    container_name: purple-splunk
+    hostname: splunk
+    environment:
+      SPLUNK_START_ARGS: "--accept-license"
+      SPLUNK_PASSWORD: "PurpleTeam2026!"
+      SPLUNK_APPS_URL: ""
+      SPLUNK_LICENSE_URI: "Free"
+    ports:
+      - "8000:8000"   # Splunk Web
+      - "8088:8088"   # HTTP Event Collector (HEC)
+      - "8089:8089"   # Splunk REST API
+      - "9997:9997"   # Splunk forwarder receiving
+    volumes:
+      - splunk-data:/opt/splunk/var
+      - ./splunk/etc/indexes.conf:/opt/splunk/etc/system/local/indexes.conf:ro
+      - ./splunk/etc/inputs.conf:/opt/splunk/etc/system/local/inputs.conf:ro
+      - ./splunk/etc/props.conf:/opt/splunk/etc/system/local/props.conf:ro
+      - ./splunk/etc/transforms.conf:/opt/splunk/etc/system/local/transforms.conf:ro
+      - ./splunk/etc/savedsearches.conf:/opt/splunk/etc/system/local/savedsearches.conf:ro
+    networks:
+      - labnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+  # ── MinIO (S3-compatible log storage) ──────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: purple-minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "purpleadmin"
+      MINIO_ROOT_PASSWORD: "PurpleTeam2026!"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO Console
+    volumes:
+      - minio-data:/data
+    networks:
+      - labnet
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Fluent Bit (log router: MinIO → Splunk HEC) ───────────────
+  fluent-bit:
+    image: fluent/fluent-bit:3.0
+    container_name: purple-fluent-bit
+    hostname: fluent-bit
+    volumes:
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - log-staging:/var/log/purple-team
+    depends_on:
+      splunk:
+        condition: service_healthy
+    networks:
+      - labnet
+    restart: unless-stopped
+
+  # ── Log Generator (produces attack + benign traffic) ───────────
+  generator:
+    build:
+      context: ./generator
+      dockerfile: Dockerfile
+    container_name: purple-generator
+    hostname: generator
+    environment:
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "purpleadmin"
+      MINIO_SECRET_KEY: "PurpleTeam2026!"
+      SPLUNK_HEC_URL: "https://splunk:8088"
+      SPLUNK_HEC_TOKEN: "purple-team-hec-token"
+      LOG_STAGING_DIR: "/var/log/purple-team"
+      DAC_MODULES_PATH: "/opt/dac_modules"
+      # Controls generation rate
+      BATCH_INTERVAL_SECONDS: "30"
+      EVENTS_PER_BATCH: "50"
+      ATTACK_RATIO: "0.3"
+    volumes:
+      - log-staging:/var/log/purple-team
+      - ./generator:/opt/generator
+    depends_on:
+      - minio
+      - splunk
+    networks:
+      - labnet
+    restart: unless-stopped
+
+volumes:
+  splunk-data:
+  minio-data:
+  log-staging:
+
+networks:
+  labnet:
+    driver: bridge
