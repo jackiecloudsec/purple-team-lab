@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "purple-team.fullname" . }}-fluentbit
+  labels:
+    app.kubernetes.io/component: fluentbit
+    {{- include "purple-team.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: fluentbit
+      {{- include "purple-team.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: fluentbit
+        {{- include "purple-team.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: fluentbit
+          image: {{ .Values.fluentbit.image }}
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+            - name: config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
+            - name: log-staging
+              mountPath: /var/log/purple-team
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+          resources:
+            {{- toYaml .Values.fluentbit.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "purple-team.fullname" . }}-fluentbit-config
+        - name: log-staging
+          emptyDir: {}
+        - name: varlog
+          hostPath:
+            path: /var/log

@@ -1,0 +1,25 @@
+Purple Team Lab deployed successfully.
+
+Access Splunk Web:
+  kubectl port-forward svc/{{ include "purple-team.fullname" . }}-splunk 8000:8000 -n {{ .Values.namespace }}
+  Then open: http://localhost:8000
+  Login: admin / (your configured password)
+
+{{- if .Values.minio.enabled }}
+
+Access MinIO Console:
+  kubectl port-forward svc/{{ include "purple-team.fullname" . }}-minio 9001:9001 -n {{ .Values.namespace }}
+  Then open: http://localhost:9001
+{{- end }}
+
+Check pod status:
+  kubectl get pods -n {{ .Values.namespace }}
+
+View generator logs:
+  kubectl logs -f deploy/{{ include "purple-team.fullname" . }}-generator -n {{ .Values.namespace }}
+
+Splunk indexes: {{ range .Values.splunk.indexes }}{{ .name }}, {{ end }}
+
+Detection rules: 10 saved searches deployed to Splunk.
+Run a quick check:
+  index=cloudtrail | stats count by eventName | head 10

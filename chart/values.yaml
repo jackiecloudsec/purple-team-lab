@@ -1,0 +1,69 @@
+namespace: purple-team
+
+splunk:
+  image: splunk/splunk:9.1
+  password: PurpleTeam2026!
+  license: Free
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  storage: 2Gi
+  hec:
+    token: purple-team-hec-token
+    enableSSL: true
+  indexes:
+    - name: cloudtrail
+      maxSizeMB: 1024
+    - name: vpc_flow
+      maxSizeMB: 1024
+    - name: guardduty
+      maxSizeMB: 512
+    - name: falco
+      maxSizeMB: 512
+    - name: waf
+      maxSizeMB: 512
+    - name: dns
+      maxSizeMB: 512
+
+minio:
+  enabled: true
+  image: minio/minio:latest
+  rootUser: purpleadmin
+  rootPassword: PurpleTeam2026!
+  storage: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+fluentbit:
+  image: fluent/fluent-bit:3.0
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+generator:
+  image: purple-gen:latest
+  imagePullPolicy: IfNotPresent
+  batchInterval: 30
+  eventsPerBatch: 50
+  attackRatio: "0.3"
+  dacModulesPath: /opt/dac_modules
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

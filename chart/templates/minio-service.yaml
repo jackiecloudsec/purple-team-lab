@@ -1,0 +1,21 @@
+{{- if .Values.minio.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "purple-team.fullname" . }}-minio
+  labels:
+    app.kubernetes.io/component: minio
+    {{- include "purple-team.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+    - name: console
+      port: 9001
+      targetPort: console
+  selector:
+    app.kubernetes.io/component: minio
+    {{- include "purple-team.selectorLabels" . | nindent 4 }}
+{{- end }}

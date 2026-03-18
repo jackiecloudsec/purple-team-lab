@@ -1,0 +1,232 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "purple-team.fullname" . }}-splunk-config
+  labels:
+    app.kubernetes.io/component: splunk
+    {{- include "purple-team.labels" . | nindent 4 }}
+data:
+  indexes.conf: |
+    {{- range .Values.splunk.indexes }}
+    [{{ .name }}]
+    homePath   = $SPLUNK_DB/{{ .name }}/db
+    coldPath   = $SPLUNK_DB/{{ .name }}/colddb
+    thawedPath = $SPLUNK_DB/{{ .name }}/thaweddb
+    maxTotalDataSizeMB = {{ .maxSizeMB }}
+    frozenTimePeriodInSecs = 604800
+    {{ end }}
+  inputs.conf: |
+    [http]
+    disabled = 0
+    port = 8088
+    enableSSL = {{ if .Values.splunk.hec.enableSSL }}1{{ else }}0{{ end }}
+    dedicatedIoThreads = 2
+
+    [http://purple-team-hec]
+    disabled = 0
+    index = cloudtrail
+    indexes = {{ range $i, $idx := .Values.splunk.indexes }}{{ if $i }},{{ end }}{{ $idx.name }}{{ end }}
+    token = {{ .Values.splunk.hec.token }}
+    sourcetype = _json
+
+    {{- range .Values.splunk.indexes }}
+    [monitor:///var/log/purple-team/{{ .name }}/*.json]
+    disabled = 0
+    index = {{ .name }}
+    host = purple-lab
+    {{- end }}
+
+  props.conf: |
+    [aws:cloudtrail]
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%SZ
+    TIME_PREFIX = "eventTime"\s*:\s*"
+    MAX_TIMESTAMP_LOOKAHEAD = 30
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = cloud
+
+    [aws:cloudwatchlogs:vpcflow]
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%SZ
+    TIME_PREFIX = "timestamp"\s*:\s*"
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = network
+
+    [aws:cloudwatch:guardduty]
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%SZ
+    TIME_PREFIX = "createdAt"\s*:\s*"
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = security
+
+    [falco:alerts]
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%9N%Z
+    TIME_PREFIX = "output_fields.evt.time"\s*:\s*"
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = security
+
+    [aws:waf]
+    TIME_FORMAT = %s%3N
+    TIME_PREFIX = "timestamp"\s*:\s*
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = web
+
+    [aws:route53:querylog]
+    TIME_FORMAT = %Y-%m-%dT%H:%M:%SZ
+    TIME_PREFIX = "query_timestamp"\s*:\s*"
+    SHOULD_LINEMERGE = false
+    LINE_BREAKER = ([\r\n]+)
+    KV_MODE = json
+    TRUNCATE = 0
+    category = network
+
+  transforms.conf: |
+    [cloudtrail_attacker_ip]
+    REGEX = "sourceIPAddress"\s*:\s*"([^"]+)"
+    FORMAT = src_ip::$1
+
+    [vpc_flow_action]
+    REGEX = "action"\s*:\s*"(ACCEPT|REJECT)"
+    FORMAT = flow_action::$1
+
+    [guardduty_severity]
+    REGEX = "severity"\s*:\s*(\d+\.?\d*)
+    FORMAT = finding_severity::$1
+
+  savedsearches.conf: |
+    [PT - Unauthorized API from Malicious IP]
+    search = index=cloudtrail errorCode IN ("AccessDenied", "UnauthorizedAccess", "Client.UnauthorizedAccess") \
+    | stats count by sourceIPAddress, userIdentity, eventName \
+    | where count > 3 \
+    | sort -count
+    dispatch.earliest_time = -15m
+    dispatch.latest_time = now
+    cron_schedule = */5 * * * *
+    enableSched = 1
+    alert.severity = 4
+    alert_type = number of events
+    alert_comparator = greater than
+    alert_threshold = 0
+    description = Detects repeated unauthorized API calls from a single IP.
+    action.email = 0
+
+    [PT - VPC Flow Port Scan Detection]
+    search = index=vpc_flow action="REJECT" \
+    | stats dc(dstPort) as unique_ports, count as total_rejected by srcAddr \
+    | where unique_ports > 5 \
+    | sort -unique_ports
+    dispatch.earliest_time = -15m
+    dispatch.latest_time = now
+    cron_schedule = */5 * * * *
+    enableSched = 1
+    alert.severity = 3
+    description = Detects port scanning activity via rejected VPC flow logs.
+
+    [PT - GuardDuty High Severity Findings]
+    search = index=guardduty severity>=7.0 \
+    | table _time, findingType, severity, actorIp, actorIdentity, description \
+    | sort -severity
+    dispatch.earliest_time = -15m
+    dispatch.latest_time = now
+    cron_schedule = */5 * * * *
+    enableSched = 1
+    alert.severity = 5
+    description = Surfaces high-severity GuardDuty findings for immediate triage.
+
+    [PT - Anomalous API Diversity]
+    search = index=cloudtrail \
+    | stats dc(eventName) as unique_apis, count as total_calls by sourceIPAddress \
+    | where unique_apis > 8 AND total_calls > 15 \
+    | sort -unique_apis
+    dispatch.earliest_time = -30m
+    dispatch.latest_time = now
+    cron_schedule = */10 * * * *
+    enableSched = 1
+    alert.severity = 4
+    description = Detects a single IP making unusually diverse API calls.
+
+    [PT - IAM Persistence Indicators]
+    search = index=cloudtrail eventName IN ("CreateUser", "CreateAccessKey", "CreateLoginProfile", "AttachUserPolicy", "AttachRolePolicy", "CreateRole", "PutRolePolicy") \
+    | stats count, values(eventName) as actions by sourceIPAddress, userIdentity \
+    | where count > 2
+    dispatch.earliest_time = -30m
+    dispatch.latest_time = now
+    cron_schedule = */10 * * * *
+    enableSched = 1
+    alert.severity = 5
+    description = Detects IAM manipulation commonly used for persistence.
+
+    [PT - S3 Data Exfiltration Pattern]
+    search = index=cloudtrail eventName IN ("GetObject", "CopyObject", "ListBuckets", "ListObjects") \
+    | stats count as api_count by sourceIPAddress, userIdentity \
+    | where api_count > 20 \
+    | join sourceIPAddress [search index=vpc_flow action="ACCEPT" bytes>100000 | stats sum(bytes) as total_bytes by srcAddr | rename srcAddr as sourceIPAddress] \
+    | where total_bytes > 500000
+    dispatch.earliest_time = -30m
+    dispatch.latest_time = now
+    cron_schedule = */10 * * * *
+    enableSched = 1
+    alert.severity = 5
+    description = Cross-correlates S3 API activity with large VPC flow transfers.
+
+    [PT - SSH Brute Force via VPC Flow]
+    search = index=vpc_flow dstPort=22 action="REJECT" \
+    | stats count by srcAddr \
+    | where count > 10 \
+    | sort -count
+    dispatch.earliest_time = -15m
+    dispatch.latest_time = now
+    cron_schedule = */5 * * * *
+    enableSched = 1
+    alert.severity = 4
+    description = Detects SSH brute force attempts from rejected VPC flow logs.
+
+    [PT - Cross-Source IP Correlation]
+    search = index=cloudtrail OR index=vpc_flow OR index=guardduty \
+    | eval src=coalesce(sourceIPAddress, srcAddr, actorIp) \
+    | stats dc(index) as log_sources, values(index) as sources, count by src \
+    | where log_sources >= 2 AND count > 5 \
+    | sort -log_sources -count
+    dispatch.earliest_time = -1h
+    dispatch.latest_time = now
+    cron_schedule = */15 * * * *
+    enableSched = 1
+    alert.severity = 4
+    description = Finds IPs appearing across multiple log sources.
+
+    [PT - Lateral Movement Detection]
+    search = index=vpc_flow dstPort IN (22, 3389, 5985, 5986) action="ACCEPT" \
+    | stats dc(dstAddr) as unique_targets, values(dstAddr) as targets by srcAddr \
+    | where unique_targets > 2 \
+    | sort -unique_targets
+    dispatch.earliest_time = -30m
+    dispatch.latest_time = now
+    cron_schedule = */10 * * * *
+    enableSched = 1
+    alert.severity = 4
+    description = Detects lateral movement via remote access ports.
+
+    [PT - DNS Exfiltration Indicator]
+    search = index=dns \
+    | eval subdomain_len=len(mvindex(split(query_name, "."), 0)) \
+    | where subdomain_len > 40 OR query_type="TXT" \
+    | stats count by srcAddr, query_name \
+    | sort -count
+    dispatch.earliest_time = -30m
+    dispatch.latest_time = now
+    cron_schedule = */10 * * * *
+    enableSched = 1
+    alert.severity = 3
+    description = Detects potential DNS tunneling/exfiltration.

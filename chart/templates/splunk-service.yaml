@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "purple-team.fullname" . }}-splunk
+  labels:
+    app.kubernetes.io/component: splunk
+    {{- include "purple-team.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: web
+      port: 8000
+      targetPort: web
+    - name: hec
+      port: 8088
+      targetPort: hec
+    - name: mgmt
+      port: 8089
+      targetPort: mgmt
+    - name: forwarder
+      port: 9997
+      targetPort: forwarder
+  selector:
+    app.kubernetes.io/component: splunk
+    {{- include "purple-team.selectorLabels" . | nindent 4 }}

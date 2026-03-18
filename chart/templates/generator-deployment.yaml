@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "purple-team.fullname" . }}-generator
+  labels:
+    app.kubernetes.io/component: generator
+    {{- include "purple-team.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: generator
+      {{- include "purple-team.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: generator
+        {{- include "purple-team.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: generator
+          image: {{ .Values.generator.image }}
+          imagePullPolicy: {{ .Values.generator.imagePullPolicy }}
+          env:
+            - name: SPLUNK_HEC_URL
+              value: "https://{{ include "splunk.host" . }}:8088"
+            - name: SPLUNK_HEC_TOKEN
+              value: {{ .Values.splunk.hec.token }}
+            - name: MINIO_ENDPOINT
+              value: "{{ include "purple-team.fullname" . }}-minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "purple-team.fullname" . }}-secrets
+                  key: minio-root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "purple-team.fullname" . }}-secrets
+                  key: minio-root-password
+            - name: LOG_STAGING_DIR
+              value: /var/log/purple-team
+            - name: DAC_MODULES_PATH
+              value: {{ .Values.generator.dacModulesPath }}
+            - name: BATCH_INTERVAL_SECONDS
+              value: {{ .Values.generator.batchInterval | quote }}
+            - name: EVENTS_PER_BATCH
+              value: {{ .Values.generator.eventsPerBatch | quote }}
+            - name: ATTACK_RATIO
+              value: {{ .Values.generator.attackRatio | quote }}
+          volumeMounts:
+            - name: log-staging
+              mountPath: /var/log/purple-team
+          resources:
+            {{- toYaml .Values.generator.resources | nindent 12 }}
+      volumes:
+        - name: log-staging
+          emptyDir: {}
